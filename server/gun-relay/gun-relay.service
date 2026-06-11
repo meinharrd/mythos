@@ -1,0 +1,14 @@
+[Unit]
+Description=Gun.js relay for MYTHOS multiplayer
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/gun-relay
+ExecStart=/home/ubuntu/.nvm/versions/node/v24.8.0/bin/node server.js
+Restart=always
+RestartSec=3
+Environment=GUN_PORT=8767
+
+[Install]
+WantedBy=multi-user.target

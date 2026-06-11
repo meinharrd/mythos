@@ -1,0 +1,13 @@
+{
+  "name": "mythos-gun-relay",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Gun.js relay peer for MYTHOS multiplayer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "gun": "^0.2020.1241"
+  }
+}
