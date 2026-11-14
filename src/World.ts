@@ -24,8 +24,8 @@ export const EAST_OUTER = 80;
 export const GARDEN_OUTER = 72;
 const WALL_HEIGHT = 7;
 const CEILING_HEIGHT = 7.2;
-const DOOR_WIDTH = 5;
-const DOOR_HEIGHT = 3.6;
+export const DOOR_WIDTH = 5;
+export const DOOR_HEIGHT = 3.6;
 /** Height of the gallery deck above the east corridor. */
 const GALLERY_Y = 4.4;
 /** Max ledge height that can be walked up without jumping. */
@@ -67,7 +67,7 @@ const ZONE_RECTS: Array<[number, number, number, number]> = [
  * segment instead of stretching with the box. `tile` = meters per texture
  * repeat.
  */
-function worldUVBox(w: number, h: number, d: number, tile: number): THREE.BoxGeometry {
+export function worldUVBox(w: number, h: number, d: number, tile: number): THREE.BoxGeometry {
   const g = new THREE.BoxGeometry(w, h, d);
   const uv = g.attributes.uv as THREE.BufferAttribute;
   // BoxGeometry face order: +x, -x, +y, -y, +z, -z (4 verts each).
@@ -94,7 +94,7 @@ function worldUVBox(w: number, h: number, d: number, tile: number): THREE.BoxGeo
  * centered). Every face shows the middle of the design undistorted —
  * emblems stay circular on non-square crate faces.
  */
-function coverUVBox(w: number, h: number, d: number): THREE.BoxGeometry {
+export function coverUVBox(w: number, h: number, d: number): THREE.BoxGeometry {
   const g = new THREE.BoxGeometry(w, h, d);
   const uv = g.attributes.uv as THREE.BufferAttribute;
   const dims: Array<[number, number]> = [
@@ -170,17 +170,28 @@ export class World {
   readonly gatePos = new THREE.Vector3(0, 0, GARDEN_OUTER - 1);
   /** Enemy spawn spots, grouped by zone id. */
   readonly spawnSpots: Array<Array<[number, number]>> = [];
-  private doors: Door[] = [];
+  protected doors: Door[] = [];
+  /**
+   * Zone-to-zone connections for enemy routing: every door, plus open
+   * passages (portals) on maps that split a room into several zones.
+   */
+  protected navLinks: Array<{ center: THREE.Vector3; zoneA: number; zoneB: number }> = [];
   /** nextHop[a][b]: first zone to move to when travelling a -> b. */
-  private nextHop: number[][] = [];
-  private alarm = false;
-  private time = 0;
+  protected nextHop: number[][] = [];
+  /** Height of the ceiling plane that stops upward shots. */
+  protected ceilingY = CEILING_HEIGHT;
+  protected alarm = false;
+  protected time = 0;
   private flickerLight!: THREE.PointLight;
   private beaconLight!: THREE.PointLight;
-  private hemi!: THREE.HemisphereLight;
-  private fog!: THREE.FogExp2;
+  protected hemi!: THREE.HemisphereLight;
+  protected fog!: THREE.FogExp2;
 
-  constructor(arenaMode = false) {
+  /**
+   * `buildCampaign` false leaves an empty campaign world for a subclass
+   * (another level) to fill in.
+   */
+  constructor(arenaMode = false, buildCampaign = true) {
     this.arenaMode = arenaMode;
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x05080f);
@@ -196,6 +207,7 @@ export class World {
       this.buildArenaMap();
       return;
     }
+    if (!buildCampaign) return;
 
     this.bounds.minX = -ARENA_HALF + 1.5;
     this.bounds.maxX = EAST_OUTER - 2.5;
@@ -1381,11 +1393,11 @@ export class World {
     this.scene.add(beams);
   }
 
-  private addObstacleBox(cx: number, cz: number, sx: number, sy: number, sz: number): void {
+  protected addObstacleBox(cx: number, cz: number, sx: number, sy: number, sz: number): void {
     this.addObstacleBoxAt(cx, cz, sx, sz, 0, sy);
   }
 
-  private addObstacleBoxAt(
+  protected addObstacleBoxAt(
     cx: number,
     cz: number,
     sx: number,
@@ -1954,47 +1966,80 @@ export class World {
       { x: 0, z: GARDEN_OUTER - 1, axis: "x", a: 7, b: 7, deep: true, tag: "gate", w: 6, h: 4 },
     ];
     for (const d of defs) {
-      const w = d.w ?? DOOR_WIDTH;
-      const h = d.h ?? DOOR_HEIGHT;
-      const sx = d.axis === "x" ? w : 1.2;
-      const sz = d.axis === "x" ? 1.2 : w;
-      const depth = d.deep ? 2.4 : 1.4;
-      const obstacle = this.addObstacleBoxAt(d.x, d.z, sx, sz, 0, h);
-      this.doors.push(
-        new Door(
-          this.scene,
-          d.x,
-          d.z,
-          d.axis,
-          d.a,
-          d.b,
-          obstacle,
-          geo,
-          panelMat,
-          new THREE.MeshBasicMaterial({ color: stripeColor[d.b] }),
-          new THREE.MeshBasicMaterial({ color: frameColor[d.b] }),
-          depth,
-          w,
-          h,
-          d.tag ?? null,
-          d.tag !== undefined // tagged doors start locked
-        )
-      );
+      this.addDoor(d, geo, panelMat, stripeColor[d.b], frameColor[d.b]);
     }
+    this.buildRouting(ZONE_COUNT);
+  }
 
-    // Precompute zone routing (BFS over the door graph) so navigation
-    // can cross multiple rooms: nextHop[a][b] = first zone after `a`.
-    const adj: number[][] = Array.from({ length: ZONE_COUNT }, () => []);
-    for (const d of this.doors) {
-      if (d.zoneA === d.zoneB) continue;
-      adj[d.zoneA].push(d.zoneB);
-      adj[d.zoneB].push(d.zoneA);
+  /**
+   * Add a sliding door (with its blocking obstacle and nav link). Tagged
+   * doors start locked until `unlockTag(tag)`.
+   */
+  protected addDoor(
+    d: {
+      x: number;
+      z: number;
+      axis: "x" | "z";
+      a: number;
+      b: number;
+      deep?: boolean;
+      tag?: string;
+      w?: number;
+      h?: number;
+    },
+    geo: THREE.BufferGeometry,
+    panelMat: THREE.Material,
+    stripeColor: number,
+    frameColor: number
+  ): void {
+    const w = d.w ?? DOOR_WIDTH;
+    const h = d.h ?? DOOR_HEIGHT;
+    const sx = d.axis === "x" ? w : 1.2;
+    const sz = d.axis === "x" ? 1.2 : w;
+    const depth = d.deep ? 2.4 : 1.4;
+    const obstacle = this.addObstacleBoxAt(d.x, d.z, sx, sz, 0, h);
+    const door = new Door(
+      this.scene,
+      d.x,
+      d.z,
+      d.axis,
+      d.a,
+      d.b,
+      obstacle,
+      geo,
+      panelMat,
+      new THREE.MeshBasicMaterial({ color: stripeColor }),
+      new THREE.MeshBasicMaterial({ color: frameColor }),
+      depth,
+      w,
+      h,
+      d.tag ?? null,
+      d.tag !== undefined // tagged doors start locked
+    );
+    this.doors.push(door);
+    if (d.a !== d.b) this.navLinks.push({ center: door.center, zoneA: d.a, zoneB: d.b });
+  }
+
+  /** Open passage between two zones (no door): a routing waypoint only. */
+  protected addPortal(x: number, z: number, zoneA: number, zoneB: number): void {
+    this.navLinks.push({ center: new THREE.Vector3(x, 0, z), zoneA, zoneB });
+  }
+
+  /**
+   * Precompute zone routing (BFS over the nav-link graph) so navigation
+   * can cross multiple rooms: nextHop[a][b] = first zone after `a`.
+   */
+  protected buildRouting(zoneCount: number): void {
+    const adj: number[][] = Array.from({ length: zoneCount }, () => []);
+    for (const l of this.navLinks) {
+      adj[l.zoneA].push(l.zoneB);
+      adj[l.zoneB].push(l.zoneA);
     }
-    this.nextHop = Array.from({ length: ZONE_COUNT }, () => new Array(ZONE_COUNT).fill(-1));
-    for (let src = 0; src < ZONE_COUNT; src++) {
-      const prev = new Array(ZONE_COUNT).fill(-1);
+    this.nextHop = Array.from({ length: zoneCount }, () => new Array(zoneCount).fill(-1));
+    for (let src = 0; src < zoneCount; src++) {
+      const prev = new Array(zoneCount).fill(-1);
       const queue = [src];
-      const seen = new Array(ZONE_COUNT).fill(false);
+      const seen = new Array(zoneCount).fill(false);
       seen[src] = true;
       while (queue.length) {
         const z = queue.shift()!;
@@ -2005,7 +2050,7 @@ export class World {
           queue.push(n);
         }
       }
-      for (let dst = 0; dst < ZONE_COUNT; dst++) {
+      for (let dst = 0; dst < zoneCount; dst++) {
         if (dst === src || !seen[dst]) continue;
         let step = dst;
         while (prev[step] !== src) step = prev[step];
@@ -2035,9 +2080,7 @@ export class World {
   /** Per-frame world animation: doors, pickups, light flicker, alarm. */
   update(dt: number, isAgentNear: (x: number, z: number, radius: number) => boolean): void {
     this.time += dt;
-    for (const door of this.doors) {
-      door.update(dt, isAgentNear(door.center.x, door.center.z, 4.5), this.audio);
-    }
+    this.updateDoors(dt, isAgentNear);
 
     // Floating plot items: bob and spin until collected.
     for (const p of this.pickups) {
@@ -2058,6 +2101,23 @@ export class World {
     } else {
       this.beaconLight.intensity = 18 + Math.sin(this.time * 2.4) * 10;
     }
+  }
+
+  protected updateDoors(
+    dt: number,
+    isAgentNear: (x: number, z: number, radius: number) => boolean
+  ): void {
+    for (const door of this.doors) {
+      door.update(dt, isAgentNear(door.center.x, door.center.z, 4.5), this.audio);
+    }
+  }
+
+  /**
+   * Movement speed factor at a point (1 = normal). Maps with deep water
+   * slow down anything wading through it.
+   */
+  moveMultiplier(_pos: THREE.Vector3): number {
+    return 1;
   }
 
   /** Facility-wide alert: red wash, strobing gate beacon. */
@@ -2113,9 +2173,9 @@ export class World {
     if (za === zb) return null;
     const next = this.nextHop[za][zb];
     if (next < 0) return null;
-    let best: Door | null = null;
+    let best: { center: THREE.Vector3 } | null = null;
     let bestCost = Infinity;
-    for (const d of this.doors) {
+    for (const d of this.navLinks) {
       const connects =
         (d.zoneA === za && d.zoneB === next) || (d.zoneB === za && d.zoneA === next);
       if (!connects) continue;
@@ -2307,19 +2367,23 @@ export class World {
       const d = -origin.y / dir.y;
       if (d >= 0 && d < maxDist && d < nearest) nearest = d;
     } else if (dir.y > 1e-6 && !this.arenaMode) {
-      const d = (CEILING_HEIGHT - origin.y) / dir.y;
+      const d = (this.ceilingY - origin.y) / dir.y;
       if (d >= 0 && d < maxDist && d < nearest) {
-        const hx = origin.x + dir.x * d;
-        const hz = origin.z + dir.z * d;
-        // Indoors only: the arena proper and the east wing have ceilings;
-        // the yard and the garden are open sky.
-        const inArena =
-          hx > -ARENA_HALF - 2 && hx < ARENA_HALF + 2 && hz > -ARENA_HALF - 2 && hz < ARENA_HALF + 2;
-        const inWing = hx >= ARENA_HALF + 2 && hx < EAST_OUTER && hz > -28 && hz < 28;
-        if (inArena || inWing) nearest = d;
+        if (this.hasCeiling(origin.x + dir.x * d, origin.z + dir.z * d)) nearest = d;
       }
     }
     return nearest;
+  }
+
+  /**
+   * Whether a point is indoors (under the ceiling plane). Campaign: the
+   * arena proper and the east wing; the yard and garden are open sky.
+   */
+  protected hasCeiling(hx: number, hz: number): boolean {
+    const inArena =
+      hx > -ARENA_HALF - 2 && hx < ARENA_HALF + 2 && hz > -ARENA_HALF - 2 && hz < ARENA_HALF + 2;
+    const inWing = hx >= ARENA_HALF + 2 && hx < EAST_OUTER && hz > -28 && hz < 28;
+    return inArena || inWing;
   }
 
   /** True if the segment between two points is blocked by an obstacle. */

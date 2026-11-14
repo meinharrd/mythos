@@ -9,6 +9,8 @@ import { AudioFX } from "./AudioFX";
 import { HUD } from "./HUD";
 import { Multiplayer } from "./Multiplayer";
 import { TouchControls, IS_TOUCH } from "./Touch";
+import { Undervault } from "./Undervault";
+import { Level2Director } from "./Level2";
 
 const MAX_DT = 1 / 30; // clamp delta so tab-switches don't explode physics
 
@@ -21,6 +23,18 @@ const ARENA_CHANNEL = "arena";
 const RESPAWN_DELAY = 3.5;
 /** Cap on internal render width in device pixels (`?res=` overrides). */
 const MAX_RENDER_WIDTH = Math.max(320, Number(PARAMS.get("res")) || 1920);
+/** Campaign level: `?level=2` starts the Undervault (unlocked by beating level 1). */
+const LEVEL = PARAMS.get("level") === "2" ? 2 : 1;
+const LEVEL2_KEY = "mythos-level2";
+
+/** Same page with a different `?level=` (keeps debug params like ?nolock). */
+function levelUrl(level: number): string {
+  const q = new URLSearchParams(location.search);
+  if (level === 1) q.delete("level");
+  else q.set("level", String(level));
+  const qs = q.toString();
+  return location.pathname + (qs ? `?${qs}` : "");
+}
 
 function randomName(): string {
   return `Pilot-${Math.floor(Math.random() * 900 + 100)}`;
@@ -52,6 +66,8 @@ export class Game {
   private weapons!: WeaponSystem;
   private enemies!: EnemyManager;
   private effects!: Effects;
+  /** Level 2 plot and set pieces (null on level 1 and in the arena). */
+  private director: Level2Director | null = null;
 
   private mp: Multiplayer | null = null;
   private touch: TouchControls | null = null;
@@ -178,6 +194,28 @@ export class Game {
       location.reload();
     });
     this.menuRestartEl.addEventListener("click", () => this.startGame());
+    // Campaign level select and the hand-off from level 1 to level 2.
+    const l2Btn = document.getElementById("l2-btn")!;
+    const l1Btn = document.getElementById("l1-btn")!;
+    let unlocked = false;
+    try {
+      unlocked = localStorage.getItem(LEVEL2_KEY) === "1";
+    } catch {
+      /* storage blocked: level 2 stays reachable via ?level=2 */
+    }
+    l2Btn.classList.toggle("hidden", LEVEL === 2 || !unlocked);
+    l1Btn.classList.toggle("hidden", LEVEL === 1);
+    l2Btn.addEventListener("click", () => location.assign(levelUrl(2)));
+    l1Btn.addEventListener("click", () => location.assign(levelUrl(1)));
+    document.getElementById("next-level-btn")!.addEventListener("click", () => location.assign(levelUrl(2)));
+    if (LEVEL === 2) {
+      this.mpBtnEl.classList.add("hidden");
+      this.nameRowEl.classList.add("hidden");
+      this.startBtnEl.textContent = "Descend";
+      document.querySelector("#menu .tagline")!.textContent =
+        "Level 2: Undervault // The core was the key. Now find the lock.";
+      document.getElementById("briefing")!.classList.remove("hidden");
+    }
     document.getElementById("restart-btn")!.addEventListener("click", () => this.startGame());
     document.getElementById("victory-btn")!.addEventListener("click", () => this.startGame());
     for (const id of ["gameover-menu-btn", "victory-menu-btn"]) {
@@ -207,7 +245,7 @@ export class Game {
    * when the player picks single or multi player in the menu.
    */
   private initWorld(mp: boolean): void {
-    this.world = new World(mp);
+    this.world = mp ? new World(true) : LEVEL === 2 ? new Undervault() : new World(false);
     this.world.audio = this.audio; // doors hiss when they move
     // Localized ambience: the reactor core throbs, consoles whine.
     for (const h of this.world.humSpots) this.audio.addHum(h.x, h.y, h.z, h.kind);
@@ -231,11 +269,28 @@ export class Game {
       this.audio
     );
 
-    this.enemies.onKill = (_kind, score) => {
+    this.enemies.onKill = (kind, score) => {
       this.kills++;
       this.score += score + this.wave * 10;
+      if (kind === "warden") this.hud.announce("WARDEN DESTROYED", "The vault is yours");
     };
-    this.weapons.onHit = () => this.hud.hitmark();
+    this.weapons.onHit = (kind) => this.hud.hitmark(kind);
+
+    if (!mp && this.world instanceof Undervault) {
+      const director = new Level2Director({
+        world: this.world,
+        camera: this.camera,
+        player: this.player,
+        enemies: this.enemies,
+        effects: this.effects,
+        audio: this.audio,
+        hud: this.hud,
+        addScore: (n) => (this.score += n),
+        onWin: () => this.win(),
+      });
+      this.director = director;
+      this.weapons.onWorldHit = (p, dmg) => director.onWorldHit(p, dmg);
+    }
 
     if (IS_TOUCH) {
       this.touch = new TouchControls(this.player, this.weapons, () => {
@@ -245,7 +300,7 @@ export class Game {
 
     if (mp) {
       this.setupMultiplayer();
-    } else {
+    } else if (LEVEL === 1) {
       document.querySelector("#menu .tagline")!.textContent =
         "Facility Raid // Find the keycard, steal the core, get out";
     }
@@ -401,10 +456,16 @@ export class Game {
       this.wave = 0;
       this.waveCooldown = 1.5;
       this.stage = 0;
-      this.world.resetPlot();
       document.getElementById("alarm-vignette")!.classList.remove("on");
-      this.hud.setObjective(OBJECTIVES[0]);
-      this.player.reset();
+      if (this.director) {
+        this.director.reset();
+        this.hud.setObjective(this.director.objective);
+        this.player.reset(0, 5, 0); // on the freight lift, facing the tunnels
+      } else {
+        this.world.resetPlot();
+        this.hud.setObjective(OBJECTIVES[0]);
+        this.player.reset();
+      }
       this.weapons.reset();
       this.enemies.reset();
     }
@@ -451,6 +512,10 @@ export class Game {
     this.hud.announce(`WAVE ${this.wave}`);
     this.audio.wave();
 
+    if (this.director) {
+      this.enemies.spawnWave(this.director.waveKinds(this.wave), this.player);
+      return;
+    }
     const kinds: EnemyKind[] = [];
     const stalkers = 3 + this.wave * 2;
     const sentinels = Math.floor(this.wave / 2) + (this.wave > 1 ? 1 : 0);
@@ -476,12 +541,30 @@ export class Game {
     this.touch?.setActive(false);
     this.audio.wave();
     this.score += 2500;
-    this.victoryStatsEl.innerHTML = `Core recovered on wave <b>${this.wave}</b><br>Hostiles destroyed: <b>${this.kills}</b><br>Final score: <b>${this.score}</b>`;
+    const nextBtn = document.getElementById("next-level-btn")!;
+    if (LEVEL === 1) {
+      try {
+        localStorage.setItem(LEVEL2_KEY, "1");
+      } catch {
+        /* storage blocked: the button below still works this session */
+      }
+      nextBtn.classList.remove("hidden");
+      this.victoryStatsEl.innerHTML = `Core recovered on wave <b>${this.wave}</b><br>Hostiles destroyed: <b>${this.kills}</b><br>Final score: <b>${this.score}</b><br><br>But no ship came. The core cell can power the freight lift below...`;
+    } else {
+      nextBtn.classList.add("hidden");
+      this.victoryEl.querySelector("h1")!.textContent = "ESCAPED";
+      this.victoryEl.querySelector(".tagline")!.textContent = "MYTHOS is dark // The lift rises toward daylight";
+      this.victoryStatsEl.innerHTML = `Lift held through wave <b>${this.wave}</b><br>Hostiles destroyed: <b>${this.kills}</b><br>Final score: <b>${this.score}</b>`;
+    }
     this.victoryEl.classList.remove("hidden");
   }
 
   /** Advance the keycard → core → extraction chain. */
   private updatePlot(dt: number): void {
+    if (this.director) {
+      this.director.update(dt);
+      return;
+    }
     this.lockedMsgCooldown -= dt;
     const p = this.player.position;
 

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { World } from "./World";
-import { EnemyManager } from "./Enemies";
+import { EnemyManager, HitKind } from "./Enemies";
 import { Player } from "./Player";
 import { Effects } from "./Effects";
 import { AudioFX } from "./AudioFX";
@@ -86,7 +86,12 @@ export class WeaponSystem {
   private kick = 0;
   private swayTime = 0;
 
-  onHit: () => void = () => {};
+  onHit: (kind: HitKind) => void = () => {};
+  /**
+   * Level hook for shootable scenery (Level 2's relay pylons): called on
+   * world hits; returning true counts the shot as a hit.
+   */
+  onWorldHit: ((point: THREE.Vector3, damage: number) => boolean) | null = null;
   /** Set by Game in arena mode; shots then also hit remote players. */
   mp: Multiplayer | null = null;
 
@@ -375,17 +380,23 @@ export class WeaponSystem {
         _normalHint.copy(_dir).multiplyScalar(-1);
         this.effects.impact(_hitPoint, _normalHint);
         this.audio.hit();
-        this.onHit();
+        this.onHit("normal");
       } else if (enemyHit) {
         endDist = enemyHit.dist;
         _hitPoint.copy(origin).addScaledVector(_dir, endDist);
         this.enemies.damage(enemyHit.enemy, def.damage, _hitPoint, this.player.position);
-        this.audio.hit();
-        this.onHit();
+        const kind = this.enemies.lastHit;
+        if (kind !== "blocked") this.audio.hit(); // the shield pings instead
+        this.onHit(kind);
       } else if (worldDist < def.range) {
         _hitPoint.copy(origin).addScaledVector(_dir, worldDist);
         _normalHint.copy(_dir).multiplyScalar(-1);
         this.effects.impact(_hitPoint, _normalHint);
+        // Shootable scenery (pylons) is always a "right place" hit.
+        if (this.onWorldHit?.(_hitPoint, def.damage)) {
+          this.audio.hit();
+          this.onHit("weak");
+        }
       }
 
       _end.copy(origin).addScaledVector(_dir, endDist);

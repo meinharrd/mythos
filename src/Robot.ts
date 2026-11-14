@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-export type EnemyKind = "stalker" | "sentinel" | "brute";
+export type EnemyKind = "stalker" | "sentinel" | "brute" | "warden";
 
 /**
  * A procedurally built, fully rigged robot. All parts share one unit box
@@ -16,6 +16,8 @@ export interface RobotRig {
   legL: THREE.Group;
   legR: THREE.Group;
   core: THREE.Mesh;
+  /** Warden only: chest shield plate, pivoting up at its top edge. */
+  shield?: THREE.Group;
 }
 
 const BOX = new THREE.BoxGeometry(1, 1, 1);
@@ -96,7 +98,7 @@ export function buildRobot(
   coreMat: THREE.Material
 ): RobotRig {
   // Width multiplier: brutes are bulky, stalkers are slim runners.
-  const w = kind === "brute" ? 1.45 : kind === "stalker" ? 0.85 : 1;
+  const w = kind === "warden" ? 1.7 : kind === "brute" ? 1.45 : kind === "stalker" ? 0.85 : 1;
   const group = new THREE.Group();
   const hipY = 0.95;
 
@@ -164,6 +166,27 @@ export function buildRobot(
     ball(torso, coreMat, 0.08, -0.28 * w, 1.12, -0.18);
   }
 
+  let shield: THREE.Group | undefined;
+  if (kind === "warden") {
+    // Heavy pauldrons, a sensor crown and a tower shield bolted to the
+    // chest. The shield hinges at its top edge: it swings up to vent,
+    // exposing the core behind it.
+    part(torso, accentMat, 0.34, 0.26, 0.4, 0.44 * w, 0.76, 0);
+    part(torso, accentMat, 0.34, 0.26, 0.4, -0.44 * w, 0.76, 0);
+    for (const sx of [-0.09, 0, 0.09]) part(head, accentMat, 0.04, 0.14, 0.04, sx, 0.18, -0.02);
+    ball(head, coreMat, 0.06, 0, 0.27, -0.02);
+    // Twin power cells on the back: the weak spot.
+    cyl(torso, coreMat, 0.12, 0.3, 0.14, 0.52, -0.3);
+    cyl(torso, coreMat, 0.12, 0.3, -0.14, 0.52, -0.3);
+    shield = new THREE.Group();
+    shield.position.set(0, 0.86, 0.24);
+    torso.add(shield);
+    part(shield, accentMat, 0.86, 0.78, 0.07, 0, -0.38, 0.04); // plate
+    part(shield, bodyMat, 0.94, 0.08, 0.1, 0, -0.02, 0.04); // top rim
+    part(shield, bodyMat, 0.94, 0.08, 0.1, 0, -0.76, 0.04); // bottom rim
+    part(shield, coreMat, 0.5, 0.04, 0.03, 0, -0.38, 0.09); // glowing slit
+  }
+
   // Arms: pivot at the shoulder.
   const makeArm = (side: number): THREE.Group => {
     const arm = new THREE.Group();
@@ -189,5 +212,5 @@ export function buildRobot(
   const armL = makeArm(1);
   const armR = makeArm(-1);
 
-  return { group, torso, head, armL, armR, legL, legR, core };
+  return { group, torso, head, armL, armR, legL, legR, core, shield };
 }

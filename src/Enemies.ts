@@ -8,6 +8,8 @@ import { metalTexture } from "./Textures";
 import { buildRobot, RobotRig, EnemyKind } from "./Robot";
 
 export type { EnemyKind } from "./Robot";
+/** How a shot landed, for hit feedback. */
+export type HitKind = "normal" | "weak" | "blocked";
 
 interface EnemyDef {
   health: number;
@@ -56,7 +58,25 @@ const DEFS: Record<EnemyKind, EnemyDef> = {
     coreColor: 0xff3030,
     scale: 1.5,
   },
+  // Level 2 boss: MYTHOS's vault guardian. Shielded from the front;
+  // vulnerable from behind and while venting after a ground slam.
+  warden: {
+    health: 1600,
+    speed: 3.9,
+    radius: 0.95,
+    bodyY: 1.4,
+    damage: 34,
+    score: 2000,
+    color: 0x58606e,
+    coreColor: 0x4fd9ff,
+    scale: 2.1,
+  },
 };
+
+/** Warden: seconds the shield stays up (core exposed) after a slam. */
+const WARDEN_VENT = 2.8;
+/** Warden: ground-slam reach beyond its standoff ring. */
+const WARDEN_SLAM_REACH = 2.2;
 
 const POOL_SIZE = 36;
 const PROJECTILE_POOL = 48;
@@ -98,6 +118,15 @@ class Enemy {
   homeZone = 0;
   wanderTarget = new THREE.Vector3();
   wanderTimer = 0;
+  /** Warden: >0 while the shield is raised to vent (stunned, exposed). */
+  ventTimer = 0;
+  /** Warden: countdown to the next long-range bolt salvo. */
+  salvoTimer = 0;
+  /** Weak-spot hit flash on the core (seconds left). */
+  weakFlash = 0;
+  /** Hit twitch: seconds left and a random jolt direction. */
+  twitch = 0;
+  twitchDir = 1;
 
   rig!: RobotRig;
   private builtKind: EnemyKind | null = null;
@@ -200,6 +229,8 @@ class Enemy {
     this.searchTimer = 0;
     this.reactTimer = 0;
     this.hasToken = false;
+    this.ventTimer = 0;
+    this.salvoTimer = 3;
     this.wanderTarget.set(x, 0, z);
     this.wanderTimer = 0.5 + Math.random() * 1.5;
     this.bodyMat.color.setHex(def.color);
@@ -274,6 +305,11 @@ export class EnemyManager {
   private deathColor = new THREE.Color();
 
   onKill: (kind: EnemyKind, score: number) => void = () => {};
+  /**
+   * How the last `damage()` call landed: on a weak spot (Warden's back or
+   * bare core), glanced off armor ("blocked"), or a plain hit.
+   */
+  lastHit: HitKind = "normal";
 
   constructor(
     scene: THREE.Scene,
@@ -400,6 +436,18 @@ export class EnemyManager {
     }
   }
 
+  /**
+   * Spawn one unit at an exact spot (scripted encounters: the Warden).
+   * With `alertPos` it starts hunting toward that position at once.
+   */
+  spawnAt(kind: EnemyKind, x: number, z: number, homeZone: number, alertPos?: THREE.Vector3): void {
+    const e = this.pool.find((e) => !e.active);
+    if (!e) return;
+    e.spawn(kind, x, z);
+    e.homeZone = homeZone;
+    if (alertPos) this.alertEnemy(e, 1.2, alertPos);
+  }
+
   /** Facility-wide alarm: every active unit converges on the position. */
   alertAll(pos: THREE.Vector3): void {
     for (const e of this.pool) {
@@ -431,6 +479,41 @@ export class EnemyManager {
   }
 
   damage(enemy: Enemy, amount: number, hitPoint: THREE.Vector3, shooterPos?: THREE.Vector3): boolean {
+    this.lastHit = "normal";
+    if (enemy.kind === "warden" && shooterPos) {
+      if (enemy.ventTimer > 0) {
+        amount *= 1.4; // shield up, core bare
+        this.lastHit = "weak";
+      } else {
+        // Facing = (sin yaw, cos yaw). Shots from the front ring off the
+        // shield; the back-mounted power cells take extra damage.
+        const yaw = enemy.rig.group.rotation.y;
+        const sx = shooterPos.x - enemy.position.x;
+        const sz = shooterPos.z - enemy.position.z;
+        const len = Math.hypot(sx, sz) || 1;
+        const dot = (Math.sin(yaw) * sx + Math.cos(yaw) * sz) / len;
+        if (dot > 0.3) {
+          _spark.setHex(0xdff6ff);
+          this.effects.burst(hitPoint, 5, _spark, 6, 0.18, false);
+          this.audio.shieldPing(hitPoint.x, hitPoint.z);
+          amount *= 0.08;
+          this.lastHit = "blocked";
+        } else if (dot < -0.3) {
+          amount *= 1.6;
+          this.lastHit = "weak";
+        }
+      }
+      if (this.lastHit === "weak") {
+        // Bright discharge from the struck power cell or core.
+        enemy.weakFlash = 0.12;
+        enemy.twitch = 0.22;
+        enemy.twitchDir = Math.random() < 0.5 ? -1 : 1;
+        _spark.setHex(0xbff4ff);
+        this.effects.burst(hitPoint, 16, _spark, 7, 0.35, false);
+        _spark.setHex(0x4fd9ff);
+        this.effects.burst(hitPoint, 10, _spark, 3, 0.5);
+      }
+    }
     enemy.health -= amount;
     enemy.hitFlash = 0.12;
     // Getting shot wakes them up instantly; they know roughly where from.
@@ -630,6 +713,10 @@ export class EnemyManager {
       // Scale-in on spawn.
       e.spawnScale = Math.min(1, e.spawnScale + dt * 3);
       e.attackCooldown -= dt;
+      e.ventTimer = Math.max(0, e.ventTimer - dt);
+      e.weakFlash = Math.max(0, e.weakFlash - dt);
+      e.twitch = Math.max(0, e.twitch - dt);
+      e.salvoTimer -= dt;
       e.hitFlash = Math.max(0, e.hitFlash - dt);
 
       _toPlayer.subVectors(player.position, e.position);
@@ -844,6 +931,8 @@ export class EnemyManager {
           moveZ = wz / wd;
           speed = def.speed * 0.5;
         }
+      } else if (e.ventTimer > 0) {
+        // Warden venting after a slam: rooted in place, shield up.
       } else if (e.reactTimer > 0) {
         // Just spotted the player: freeze and turn before charging.
         e.reactTimer -= dt;
@@ -936,7 +1025,35 @@ export class EnemyManager {
           facePlayer = perceived && approach < 0.6;
         }
 
-        if (dist < standoff + 0.4 && Math.abs(dy) < 1.6 && e.attackCooldown <= 0 && player.alive) {
+        if (e.kind === "warden") {
+          // Long-range salvo: a fan of three bolts when you keep away.
+          if (perceived && e.salvoTimer <= 0 && dist > 11 && dist < 34) {
+            _from.copy(e.position);
+            _from.y = e.chestY;
+            for (const side of [-2.4, 0, 2.4]) {
+              _to.set(
+                player.position.x - _toPlayer.z * side,
+                player.position.y + 1.3,
+                player.position.z + _toPlayer.x * side
+              );
+              if (!this.world.blocksLine(_from, _to)) this.fireProjectile(_from, _to);
+            }
+            e.salvoTimer = 4 + Math.random() * 1.5;
+            e.attackAnim = 1;
+          }
+          // Ground slam: hits everything around it, then the shield
+          // swings up to vent and the core is exposed.
+          if (dist < standoff + WARDEN_SLAM_REACH && e.attackCooldown <= 0 && player.alive) {
+            if (Math.abs(dy) < 1.6) player.takeDamage(def.damage);
+            e.attackCooldown = 2.6;
+            e.attackAnim = 1;
+            e.ventTimer = WARDEN_VENT;
+            this.audio.slam(e.position.x, e.position.z, 1.6);
+            _center.set(e.position.x, e.position.y + 0.2, e.position.z);
+            _spark.setHex(0x9fe8ff);
+            this.effects.burst(_center, 40, _spark, 9, 0.5);
+          }
+        } else if (dist < standoff + 0.4 && Math.abs(dy) < 1.6 && e.attackCooldown <= 0 && player.alive) {
           player.takeDamage(def.damage);
           e.attackCooldown = e.kind === "brute" ? 1.5 : 0.9;
           e.attackAnim = 1;
@@ -944,6 +1061,7 @@ export class EnemyManager {
         }
       }
 
+      speed *= this.world.moveMultiplier(e.position);
       e.velocity.x = moveX * speed * e.spawnScale;
       e.velocity.z = moveZ * speed * e.spawnScale;
       e.position.x += e.velocity.x * dt;
@@ -1153,6 +1271,20 @@ export class EnemyManager {
     // Lean into the side-step.
     rig.torso.rotation.z = -lat * stride * 0.22;
     rig.head.rotation.y = Math.sin(time * 1.6 + e.position.x * 0.5) * 0.3 * (1 - stride);
+    if (e.twitch > 0) {
+      // Servo jolt: a hard jerk that rattles out over ~0.2 s.
+      const k = e.twitch / 0.22;
+      const shake = Math.sin(e.twitch * 90) * k;
+      const d = e.twitchDir;
+      rig.torso.rotation.x += 0.22 * k + 0.06 * shake;
+      rig.torso.rotation.z += 0.16 * d * shake;
+      rig.head.rotation.y += 0.5 * d * shake;
+      rig.head.rotation.x = -0.25 * k;
+      rig.armL.rotation.z += 0.35 * k * d;
+      rig.armR.rotation.z -= 0.35 * k * d;
+    } else {
+      rig.head.rotation.x = 0;
+    }
 
     const s = def.scale * (0.25 + 0.75 * e.spawnScale);
     rig.group.scale.setScalar(s);
@@ -1162,6 +1294,13 @@ export class EnemyManager {
     // Chest core / visor glow pulse; hit flash on the armor.
     e.coreMat.color.setHex(def.coreColor).multiplyScalar(0.8 + 0.25 * Math.sin(time * 6 + e.position.x));
     e.bodyMat.emissiveIntensity = e.hitFlash > 0 ? 2.5 : 0.12;
+    if (rig.shield) {
+      // Swing up while venting (bottom edge forward), back down after.
+      const want = e.ventTimer > 0 ? -1.35 : 0;
+      rig.shield.rotation.x += (want - rig.shield.rotation.x) * Math.min(1, dt * 8);
+      if (e.ventTimer > 0) e.coreMat.color.multiplyScalar(1.6);
+      if (e.weakFlash > 0) e.coreMat.color.setHex(0xffffff);
+    }
 
     e.blob.position.set(e.position.x, e.position.y + 0.02, e.position.z);
     e.blob.scale.setScalar(def.radius * def.scale * 2.4 * e.spawnScale);
@@ -1229,5 +1368,6 @@ const _to = new THREE.Vector3();
 const _center = new THREE.Vector3();
 const _corner = new THREE.Vector3();
 const _orange = new THREE.Color();
+const _spark = new THREE.Color();
 const _invGroup = new THREE.Matrix4();
 const _bake = new THREE.Matrix4();

@@ -801,3 +801,151 @@ export function enemyTexture(): THREE.CanvasTexture {
 
   return toTexture(ctx);
 }
+
+// --- Level 2: Undervault -------------------------------------------------
+
+/**
+ * Poured concrete for the flooded undercroft: blotchy, form-board seams,
+ * rust drips from the top and a dark tide line along the bottom. Meant
+ * for worldUVBox walls where one texture repeat spans the wall height.
+ */
+export function concreteTexture(): THREE.CanvasTexture {
+  const S = 512;
+  const ctx = makeCanvas(S);
+  ctx.fillStyle = rgb(78, 84, 88);
+  ctx.fillRect(0, 0, S, S);
+  for (let i = 0; i < 900; i++) {
+    const x = Math.random() * S;
+    const y = Math.random() * S;
+    const r = 2 + Math.random() * 22;
+    const v = Math.random() < 0.5 ? 0 : 255;
+    ctx.fillStyle = `rgba(${v},${v},${v},${0.02 + Math.random() * 0.04})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Form-board seams every quarter.
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  for (let k = 1; k < 4; k++) ctx.fillRect(0, (k * S) / 4 - 1, S, 2);
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  for (let k = 1; k < 4; k++) ctx.fillRect(0, (k * S) / 4 + 1, S, 1);
+  // Tie holes.
+  for (let k = 0; k < 4; k++) {
+    for (const x of [S * 0.25, S * 0.75]) rivet(ctx, x, (k + 0.5) * (S / 4), 3);
+  }
+  // Rust drips from the top edge.
+  for (let i = 0; i < 26; i++) {
+    const x = Math.random() * S;
+    const len = 30 + Math.random() * 180;
+    const g = ctx.createLinearGradient(0, 0, 0, len);
+    g.addColorStop(0, "rgba(120,58,24,0.55)");
+    g.addColorStop(1, "rgba(120,58,24,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(x, 0, 2 + Math.random() * 5, len);
+  }
+  // Tide line: everything below sat under water for years (canvas y
+  // grows downward; texture v=0 is the bottom row).
+  const tide = ctx.createLinearGradient(0, S * 0.8, 0, S);
+  tide.addColorStop(0, "rgba(20,30,24,0)");
+  tide.addColorStop(0.12, "rgba(20,30,24,0.65)");
+  tide.addColorStop(1, "rgba(10,18,14,0.8)");
+  ctx.fillStyle = tide;
+  ctx.fillRect(0, S * 0.8, S, S * 0.2);
+  scuffs(ctx, S, 160);
+  return toTexture(ctx);
+}
+
+/** Steel bar grating (catwalk decks, vent covers). */
+export function grateTexture(repeat: number): THREE.CanvasTexture {
+  const S = 128;
+  const ctx = makeCanvas(S);
+  ctx.fillStyle = rgb(14, 16, 18);
+  ctx.fillRect(0, 0, S, S);
+  ctx.fillStyle = rgb(96, 102, 108);
+  for (let k = 0; k < 8; k++) ctx.fillRect(k * 16, 0, 5, S); // bearing bars
+  ctx.fillStyle = rgb(70, 76, 82);
+  for (let k = 0; k < 4; k++) ctx.fillRect(0, k * 32 + 14, S, 3); // cross rods
+  scuffs(ctx, S, 30);
+  return toTexture(ctx, repeat, repeat);
+}
+
+/** Black/amber hazard chevrons (lift platform edges). */
+export function hazardTexture(repeat: number): THREE.CanvasTexture {
+  const ctx = makeCanvasWH(128, 32);
+  ctx.fillStyle = rgb(230, 170, 30);
+  ctx.fillRect(0, 0, 128, 32);
+  ctx.fillStyle = rgb(20, 20, 22);
+  for (let x = -32; x < 160; x += 32) {
+    ctx.beginPath();
+    ctx.moveTo(x, 32);
+    ctx.lineTo(x + 16, 32);
+    ctx.lineTo(x + 32, 0);
+    ctx.lineTo(x + 16, 0);
+    ctx.fill();
+  }
+  scuffs(ctx, 128, 40);
+  return toTexture(ctx, repeat, 1);
+}
+
+/**
+ * Tileable ripple normal map for standing water: a sum of sine waves
+ * with integer frequencies (so it wraps seamlessly), converted to a
+ * tangent-space normal map.
+ */
+export function waterNormalTexture(): THREE.CanvasTexture {
+  const S = 256;
+  const ctx = makeCanvas(S);
+  const img = ctx.createImageData(S, S);
+  const waves: Array<[number, number, number, number]> = [];
+  for (let i = 0; i < 9; i++) {
+    waves.push([
+      1 + Math.floor(Math.random() * 6),
+      1 + Math.floor(Math.random() * 6),
+      Math.random() * Math.PI * 2,
+      0.4 + Math.random() * 0.6,
+    ]);
+  }
+  const h = (x: number, y: number): number => {
+    let v = 0;
+    for (const [fx, fy, ph, a] of waves) {
+      v += a * Math.sin(((fx * x + fy * y) / S) * Math.PI * 2 + ph);
+    }
+    return v;
+  };
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const dx = h(x + 1, y) - h(x - 1, y);
+      const dy = h(x, y + 1) - h(x, y - 1);
+      const nx = -dx * 2.2;
+      const ny = -dy * 2.2;
+      const len = Math.hypot(nx, ny, 1);
+      const i = (y * S + x) * 4;
+      img.data[i] = ((nx / len) * 0.5 + 0.5) * 255;
+      img.data[i + 1] = ((ny / len) * 0.5 + 0.5) * 255;
+      img.data[i + 2] = ((1 / len) * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = toTexture(ctx);
+  t.colorSpace = THREE.NoColorSpace; // data, not color
+  return t;
+}
+
+/**
+ * Soft falloff for the flashlight's fake volumetric cone (alpha map):
+ * bright near the lens, fading out along the beam (v runs along the
+ * cone's height; v = 1 is the apex end).
+ */
+export function beamTexture(): THREE.CanvasTexture {
+  const ctx = makeCanvasWH(4, 128);
+  const g = ctx.createLinearGradient(0, 0, 0, 128);
+  g.addColorStop(0, "rgb(255,255,255)");
+  g.addColorStop(0.25, "rgb(150,150,150)");
+  g.addColorStop(1, "rgb(0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 4, 128);
+  const t = new THREE.CanvasTexture(ctx.canvas);
+  t.colorSpace = THREE.NoColorSpace;
+  return t;
+}

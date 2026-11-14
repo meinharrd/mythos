@@ -142,7 +142,8 @@ export class Player {
     // Sprint must scale acceleration too: ground friction balances
     // acceleration at accel/FRICTION, which sits below the sprint speed
     // cap — scaling only the cap would make sprint a no-op.
-    const sprint = this.isSprinting() ? SPRINT_MULT : 1;
+    // Wading (deep water) drags on both top speed and acceleration.
+    const sprint = (this.isSprinting() ? SPRINT_MULT : 1) * this.world.moveMultiplier(this.position);
     const maxSpeed = WALK_SPEED * sprint;
     const accel = (this.onGround ? ACCEL_GROUND : ACCEL_AIR) * sprint;
 

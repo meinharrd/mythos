@@ -456,6 +456,67 @@ export class AudioFX {
     this.tone("square", 1318, 1318, 0.1, 0.08, { vol: s.vol, at, delay: 0.24, lp: 2600 });
   }
 
+  // --- Level 2: Undervault ---------------------------------------------
+
+  /** Bullet ringing off the Warden's shield: bright metallic ping. */
+  shieldPing(x: number, z: number): void {
+    const s = this.spatial(x, z, 40);
+    if (!s) return;
+    const at = { x, z, y: 2.5 };
+    this.tone("triangle", 2600 + Math.random() * 500, 1900, 0.16, 0.12, { vol: s.vol, at });
+    this.noise(0.05, 0.12, 4200, 3, { vol: s.vol, at });
+  }
+
+  /** Steam vent: pressure build-up hiss (short) or full blast. */
+  steam(x: number, z: number, blast: boolean): void {
+    const s = this.spatial(x, z, 26);
+    if (!s) return;
+    const at = { x, z, y: 0.8 };
+    if (blast) {
+      this.noise(1.4, 0.32, 3200, 0.6, { vol: s.vol, at, type: "highpass", fEnd: 1400 });
+      this.noise(0.5, 0.25, 400, 0.8, { vol: s.vol, at, type: "lowpass" });
+    } else {
+      this.noise(0.5, 0.08, 5200, 1.5, { vol: s.vol, at, fEnd: 2600 });
+    }
+  }
+
+  /** Relay pylon blowing out: crackling discharge, then a power sag. */
+  pylonDown(x: number, z: number): void {
+    const s = this.spatial(x, z, 90);
+    const vol = s ? Math.max(0.35, s.vol) : 0.35;
+    const at = { x, z, y: 3 };
+    this.tone("sawtooth", 900, 40, 1.2, 0.3, { vol, at, drive: true, lp: 2400 });
+    this.tone("sine", 80, 25, 1.4, 0.5, { vol, at });
+    for (let i = 0; i < 5; i++) {
+      this.noise(0.05, 0.3, 2500 + Math.random() * 2000, 2, { vol, at, delay: i * 0.09 });
+    }
+  }
+
+  /** Facility power cut: generators spinning down into silence. */
+  blackout(): void {
+    this.tone("sawtooth", 220, 28, 2.6, 0.22, { drive: true, lp: 700 });
+    this.tone("sine", 110, 20, 2.8, 0.35);
+    this.noise(0.12, 0.3, 900, 1.5);
+  }
+
+  /** The Warden powering up: a deep mechanical bellow. */
+  wardenRoar(x: number, z: number): void {
+    const s = this.spatial(x, z, 120);
+    const vol = s ? Math.max(0.5, s.vol) : 0.5;
+    const at = { x, z, y: 3 };
+    this.tone("sawtooth", 55, 38, 1.8, 0.5, { vol, at, drive: true, lp: 600 });
+    this.tone("sawtooth", 82, 54, 1.6, 0.35, { vol, at, drive: true, lp: 900 });
+    this.noise(1.6, 0.25, 300, 0.7, { vol, at, type: "lowpass", fEnd: 120 });
+  }
+
+  /** Freight lift motors winding up / the cage lurching upward. */
+  liftStart(): void {
+    this.tone("sawtooth", 40, 120, 3, 0.25, { drive: true, lp: 500 });
+    this.noise(0.15, 0.4, 700, 1.4);
+    this.tone("square", 660, 660, 0.12, 0.07, { delay: 0.2, lp: 1800 });
+    this.tone("square", 990, 990, 0.18, 0.07, { delay: 0.36, lp: 2000 });
+  }
+
   /** Facility alarm: three falling distorted wails. */
   alarm(): void {
     for (let i = 0; i < 3; i++) {

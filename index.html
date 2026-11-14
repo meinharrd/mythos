@@ -47,6 +47,20 @@
       #hitmarker span:nth-child(3) { left: 0; bottom: 0; width: 8px; height: 2px; }
       #hitmarker span:nth-child(4) { right: 0; bottom: 0; width: 8px; height: 2px; }
       #hitmarker.show { animation: hitpop 180ms ease-out; }
+      /* Hit in the right place: larger amber marker that lingers. */
+      #hitmarker.weak span { background: #ffb347; box-shadow: 0 0 12px #ff8a1f; height: 3px; width: 11px; }
+      #hitmarker.weak.show { animation: hitpop-weak 280ms ease-out; }
+      /* Deflected by armor: small, dim, grey. */
+      #hitmarker.blocked span { background: #8fa0b4; box-shadow: none; }
+      #hitmarker.blocked.show { animation: hitpop-blocked 160ms ease-out; }
+      @keyframes hitpop-weak {
+        0% { opacity: 1; transform: translate(-50%, -50%) rotate(45deg) scale(0.8); }
+        100% { opacity: 0; transform: translate(-50%, -50%) rotate(45deg) scale(1.9); }
+      }
+      @keyframes hitpop-blocked {
+        0% { opacity: 0.8; transform: translate(-50%, -50%) rotate(45deg) scale(0.5); }
+        100% { opacity: 0; transform: translate(-50%, -50%) rotate(45deg) scale(0.8); }
+      }
       @keyframes hitpop {
         0% { opacity: 1; transform: translate(-50%, -50%) rotate(45deg) scale(0.6); }
         100% { opacity: 0; transform: translate(-50%, -50%) rotate(45deg) scale(1.3); }
@@ -93,6 +107,10 @@
       }
 
       #objective-panel { top: 18px; left: 22px; max-width: 340px; border-radius: 8px; }
+      #briefing {
+        max-width: 520px; margin: -6px auto 16px; font-size: 13px; line-height: 1.55;
+        color: #b9c6d8; text-align: center;
+      }
       #objective-text { font-size: 12.5px; color: #ffd9a0; line-height: 1.45; }
       #objective-text::before { content: "\25B8 "; color: var(--accent); }
       #objective-panel.flash { animation: objflash 2.6s ease-out; }
@@ -333,6 +351,11 @@
     <div class="screen" id="menu">
       <h1>MYTH<span>OS</span></h1>
       <p class="tagline">Solo facility raid // or arena deathmatch against other pilots</p>
+      <p class="hidden" id="briefing">
+        You got the core cell out, but no ship came. The only way off the site is the
+        freight lift deep under the facility, and the cell can power it. Down there,
+        in the flooded Undervault, lives MYTHOS: the mind that runs the machines.
+      </p>
       <div class="controls">
         <b>WASD</b><span>Move</span>
         <b>Arrows</b><span>Move / Turn</span>
@@ -341,10 +364,13 @@
         <b>Space</b><span>Jump</span>
         <b>R</b><span>Reload</span>
         <b>1 / 2 / 3</b><span>Switch weapon</span>
+        <b>F</b><span>Flashlight (level 2)</span>
       </div>
       <div class="menu-buttons">
         <button class="btn" id="start-btn">Single Player</button>
         <button class="btn" id="mp-btn">Multiplayer</button>
+        <button class="btn secondary hidden" id="l2-btn">Level 2: Undervault</button>
+        <button class="btn secondary hidden" id="l1-btn">Back to Level 1</button>
         <button class="btn secondary hidden" id="menu-restart-btn">Restart Run</button>
         <button class="btn secondary hidden" id="leave-btn">Leave Arena</button>
       </div>
@@ -387,6 +413,7 @@
       <p class="tagline">Core secured // Facility behind you</p>
       <div id="victory-stats"></div>
       <div class="menu-buttons">
+        <button class="btn hidden" id="next-level-btn">Descend: Level 2</button>
         <button class="btn" id="victory-btn">Run It Again</button>
         <button class="btn secondary" id="victory-menu-btn">Main Menu</button>
       </div>

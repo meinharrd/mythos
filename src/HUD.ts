@@ -78,12 +78,20 @@ export class HUD {
     this.fpsPanel.textContent = `${fps} FPS`;
   }
 
-  hitmark(): void {
-    this.crosshair.classList.add("hit");
-    this.hitmarker.classList.remove("show");
+  /**
+   * Hitmarker: white for a plain hit, a big amber burst for a hit in the
+   * right place (Warden's back/core, relay pylons), a small grey marker
+   * when armor deflects the shot.
+   */
+  hitmark(kind: "normal" | "weak" | "blocked" = "normal"): void {
+    if (kind !== "blocked") {
+      this.crosshair.classList.add("hit");
+      setTimeout(() => this.crosshair.classList.remove("hit"), 100);
+    }
+    this.hitmarker.classList.remove("show", "weak", "blocked");
     void this.hitmarker.offsetWidth; // restart CSS animation
+    if (kind !== "normal") this.hitmarker.classList.add(kind);
     this.hitmarker.classList.add("show");
-    setTimeout(() => this.crosshair.classList.remove("hit"), 100);
   }
 
   setObjective(text: string): void {

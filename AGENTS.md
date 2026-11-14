@@ -12,12 +12,14 @@ Guidance for AI agents and contributors working on MYTHOS.
 
 - `?nolock` — runs without pointer lock, never pauses, and exposes the game instance as `window.__game` (player, world, mp, weapons are reachable). Use this for any scripted browser testing.
 - `?touch` — forces the mobile touch UI on desktop.
+- `?level=2` — starts the level 2 campaign (Undervault) directly.
 - `node scripts/mp-bot.mjs <room> <name> [--shoot]` — headless arena player (15 Hz pose publisher, applies incoming damage, optionally shoots back). Default room is `arena`, the one everybody plays in.
 
 ## Architecture (src/)
 
 - `Game.ts` — orchestrator. World and everything in it are built lazily on the menu's single/multi choice (`initWorld`). State: menu / playing / dead / won.
-- `World.ts` — both maps: campaign facility and the MP arena (`arenaMode` ctor flag). AABB obstacles, custom raycast/collide; no physics engine.
+- `World.ts` — level 1 (campaign facility) and the MP arena (`arenaMode` ctor flag). AABB obstacles, custom raycast/collide; no physics engine. Zones + `navLinks` (doors and open portals) drive enemy routing.
+- `Undervault.ts` / `Level2.ts` — level 2 (`?level=2`, unlocked by beating level 1). `Undervault` subclasses `World` (map + data: water, vents, pylons, laser, lift); `Level2Director` runs its plot, hazards, blackout and flashlight. Game delegates plot and wave composition to the director when one exists.
 - `Player.ts`, `Weapons.ts`, `Enemies.ts` — local simulation. Hitscan weapons raycast world, enemies, then remote players.
 - `Net.ts` / `Multiplayer.ts` / `RemoteAvatar.ts` — gun.js layer (see below).
 - `Robot.ts` (enemies) / `Human.ts` (player avatars) — procedural rigs from shared unit geometries. Part matrices are frozen at build time; animation rotates joint Groups only.
