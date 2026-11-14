@@ -19,6 +19,8 @@ const NO_LOCK = PARAMS.has("nolock");
 /** The one shared arena everybody plays in (for now). */
 const ARENA_CHANNEL = "arena";
 const RESPAWN_DELAY = 3.5;
+/** Cap on internal render width in device pixels (`?res=` overrides). */
+const MAX_RENDER_WIDTH = Math.max(320, Number(PARAMS.get("res")) || 1920);
 
 function randomName(): string {
   return `Pilot-${Math.floor(Math.random() * 900 + 100)}`;
@@ -90,8 +92,7 @@ export class Game {
       powerPreference: "high-performance",
       stencil: false,
     });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.applySize();
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // Static scene: render the shadow map once, then freeze it.
@@ -158,7 +159,7 @@ export class Game {
       this.camera.updateProjectionMatrix();
       this.vmCamera.aspect = this.camera.aspect;
       this.vmCamera.updateProjectionMatrix();
-      this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.applySize();
     });
 
     // Esc pauses (drops pointer lock) — the primary button then resumes
@@ -252,7 +253,52 @@ export class Game {
     // The mode is locked in for this session.
     this.mpBtnEl.classList.add("hidden");
     this.nameRowEl.classList.toggle("hidden", !mp);
+    this.prewarmShaders();
     this.ready = true;
+  }
+
+  /**
+   * Canvas size with a capped internal resolution: at most MAX_RENDER_WIDTH
+   * device pixels wide (and DPR <= 2), so Retina/4K screens don't render
+   * 4x the pixels for little visible gain. `?res=<px>` overrides the cap.
+   */
+  private applySize(): void {
+    const w = window.innerWidth;
+    const ratio = Math.min(window.devicePixelRatio || 1, 2, MAX_RENDER_WIDTH / w);
+    this.renderer.setPixelRatio(ratio);
+    this.renderer.setSize(w, window.innerHeight);
+  }
+
+  /**
+   * Compile every shader program up front so the first muzzle flash,
+   * pickup or wave doesn't hitch. renderer.compile only visits visible
+   * objects, so pooled/hidden objects are shown for the duration, plus a
+   * throwaway robot rig (enemy rigs are otherwise built on first spawn).
+   * Visibility is restored before the next frame renders.
+   */
+  private prewarmShaders(): void {
+    const scene = this.world.scene;
+    const hidden: THREE.Object3D[] = [];
+    const reveal = (root: THREE.Object3D): void =>
+      root.traverse((o) => {
+        // Lights stay as they are: revealing one would change the light
+        // count and compile programs the game never uses.
+        if (!o.visible && !(o as THREE.Light).isLight) {
+          hidden.push(o);
+          o.visible = true;
+        }
+      });
+    const rig = this.enemies.makeWarmupRig();
+    scene.add(rig);
+    reveal(scene);
+    reveal(this.vmScene);
+    try {
+      this.renderer.compile(scene, this.camera);
+      this.renderer.compile(this.vmScene, this.vmCamera);
+    } finally {
+      for (const o of hidden) o.visible = false;
+      scene.remove(rig);
+    }
   }
 
   /** Menu in "fresh start" or "paused run" trim. */

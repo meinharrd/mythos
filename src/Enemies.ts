@@ -359,6 +359,17 @@ export class EnemyManager {
   }
 
   /**
+   * A throwaway robot wearing a pool slot's materials, so the shader
+   * warm-up can compile the robot programs before the first wave spawns
+   * (rigs are otherwise built lazily on spawn). Every slot's materials
+   * share the same program, so one rig covers them all.
+   */
+  makeWarmupRig(): THREE.Object3D {
+    const e = this.pool[0];
+    return buildRobot("brute", e.bodyMat, e.accentMat, e.coreMat).group;
+  }
+
+  /**
    * Garrison the wave across the facility: each unit is assigned a zone
    * (never the player's, when avoidable) and patrols only there until
    * it discovers the player.
